@@ -1,6 +1,8 @@
 import os
 import openai
 import readline
+from termcolor import colored
+
 
 assert "OPENAI_APIKEY" in os.environ, "OPENAI_APIKEY environment variable required"
 openai.api_key = os.environ["OPENAI_APIKEY"]
@@ -44,6 +46,8 @@ def replace_pdfs(string):
             count = 0
             page_content = ""
             for page in pdfReader.pages:
+                print(
+                    colored(f"Reading and parsing {filename} {count+1}/2", "green"))
                 page_content = page.extract_text()
                 page_content = _internal_gpt(
                     f"correct the following text grammatically (no intermediate outputs) [PDF PARSED TEXT STARTS] {page_content} [PDF PARSED TEXT ENDS]")
@@ -62,24 +66,36 @@ def parse_response(response):
     return response["choices"][0]["message"]["content"]
 
 
-def add_user_message(message):
+def add_user_message(message: str):
     global history
     # Truncate the history to avoid 4096 tokens limit
-    if len(history) > 10:
-        history = history[-10:]
+    if len(history) > 14:
+        history = history[:4] + history[-10:]
     history.append(dict(role="user", content=message))
 
 
-def add_assistant_message(message):
+def add_assistant_message(message: str):
     history.append(dict(role="assistant", content=message))
 
 
 def request_response():
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
-        messages=history
+        messages=history,
+        stream=True
     )
-    return response
+    message = ""
+    for chunk in response:
+        if "content" in chunk["choices"][0]["delta"]:
+            _delta: str = chunk["choices"][0]["delta"]["content"]
+            if len(message) == 0:
+                print(colored("ChatGPT: ", "blue"))
+                _delta = _delta.lstrip()
+            message += _delta
+            print(_delta, end="", flush=True)
+    if message[-1] != "\n":
+        print("\n")
+    return message
 
 
 def _internal_gpt(query):
@@ -98,8 +114,13 @@ if __name__ == '__main__':
     print("-------------")
     print("# Type `exit` to quit this program")
 
+    if os.path.exists("leading.txt"):
+        with open("leading.txt", "r") as f:
+            leading = f.read()
+        add_user_message(leading)
+
     while True:
-        message = input("User:  ")
+        message: str = input(colored("User: ", "green"))
         message = replace_pdfs(message)
         message = replace_filenames(message)
         if message == "exit":
@@ -124,10 +145,12 @@ if __name__ == '__main__':
 
         add_user_message(message)
         try:
-            response = request_response()
+            reply = request_response()
         except KeyboardInterrupt:
+            history = history[:-1]
+            print()
             continue
-        reply = parse_response(response)
         add_assistant_message(reply)
-        print("ChatGPT:  {}".format(reply))
-        print("\n")
+        if message.startswith(">"):
+            history = history[:-2]
+            print(colored("Reverting the history back...", "red"))
